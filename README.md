@@ -1,68 +1,49 @@
 # UART touchscreen expansion
 
-Undergraduate DSBM project at FIB extending the [TFT SPI driver](https://github.com/ml-felipe/tftProto_SPIdriver) with resistive touchscreen input. A PIC24 samples the panel, sends coordinates over UART, and a Raspberry Pi calibrates and displays the input. Existing demonstrations include calibration, freehand drawing and a GPIO-controlled GUI button.
+Undergraduate DSBM project at FIB extending the [TFT SPI driver](https://github.com/ml-felipe/tftProto_SPIdriver) with resistive touch input. A PIC24 samples the panel and sends coordinates to a Raspberry Pi for calibration, freehand drawing and a GPIO button demonstration.
 
-## Architecture and hardware
+## Design and hardware
 
-- `uart_pic24F_touchscreen.X/`: MPLAB X project targeting **PIC24F16KA101**, with XC16 2.10 recorded in project settings.
-- `tftDriverExpansion/uart_touchscreen.c`: Linux serial configuration and buffered reads.
-- `touch_parser.c`: incremental frame validation, independent of the serial device.
-- `calibration.c`: five-point affine least-squares fit from raw coordinates to display pixels.
-- `main.c`: terminal menu, calibration, drawing and GUI demos.
-- The sibling SPI driver supplies display initialization, drawing and BMP decoding.
+`uart_pic24F_touchscreen.X/` targets PIC24F16KA101. In `tftDriverExpansion/`, `uart_touchscreen.c` configures Linux serial I/O, `touch_parser.c` validates frames, `calibration.c` fits a five-point affine transform, and `main.c` runs the demos. Display code comes from the sibling SPI repository.
 
-Original hardware: Raspberry Pi 2, TFT Proto rev 1.01 and PIC24F16KA101. Firmware assigns X+ to RA0, X− to RA1, Y+ to RB0 and Y− to RB1. The Pi reads `/dev/serial0` at 9600 baud, 8 data bits, no parity, one stop bit and no flow control. Connect PIC UART1 TX to the Pi UART RX with compatible 3.3 V logic and common ground; verify the PIC package pinout and board wiring. Disable the Linux serial console on that UART and ensure access permissions. The GUI uses BCM GPIO21 (physical pin 40) as its output; use an appropriate external circuit for the load. Display wiring is documented in the SPI repository.
+Original setup: Raspberry Pi 2, TFT Proto rev 1.01 and PIC24F16KA101. Panel connections in firmware are X+ → RA0, X− → RA1, Y+ → RB0 and Y− → RB1. Connect PIC UART1 TX to Pi UART RX with compatible 3.3 V logic and common ground; verify package pinout and board wiring. Disable the Linux console on `/dev/serial0` and ensure serial-device access. Display wiring is in the SPI README. The GUI output is BCM GPIO21 (header pin 40); use a suitable external load circuit.
 
-## Serial protocol
+## Protocol
 
-Each frame is eight bytes:
+UART uses 9600 baud, 8N1, without flow control. Each frame has eight bytes:
 
-| Offset | Content |
+| Offset | Value |
 | --- | --- |
 | 0–1 | ASCII `XY` |
-| 2–3 | X, big-endian, 10-bit unsigned ADC value |
-| 4–5 | Y, big-endian, 10-bit unsigned ADC value |
+| 2–3 | X: big-endian, 10-bit ADC value |
+| 4–5 | Y: big-endian, 10-bit ADC value |
 | 6 | XOR of bytes 2 and 4 |
-| 7 | Newline (`0x0a`) |
+| 7 | `0x0a` |
 
-The parser retains partial frames and unread bytes across calls and searches again after malformed input. The checksum is intentionally unchanged for firmware compatibility, but **does not protect the coordinate low bytes**. Payload bytes may equal header or newline bytes; this is a fixed-length protocol, not line-oriented text. There is no explicit release event. A 100 ms gap between received frames is used as a release heuristic, so host buffering and scheduling can affect touch continuity.
+The parser retains partial frames and unread bytes, rejects malformed frames and resynchronizes. This is a fixed-length binary protocol: payload bytes can contain newline. The legacy checksum does **not** protect the low coordinate bytes. There is no release event; a 100 ms receive gap estimates a new press, so queued data and host scheduling affect continuity.
 
-## Build the Raspberry Pi application
+## Build and use
 
-Use sibling checkouts. During review, the SPI fixes are on `fix/embedded-audit`; this expansion depends on that version's `bmp.c`, tests and centered-image option.
+Install the bcm2835 library as described in the SPI README. During PR review, use both audit branches in sibling directories:
 
 ```sh
 git clone --branch fix/embedded-audit https://github.com/ml-felipe/tftProto_SPIdriver.git
 git clone --branch fix/embedded-audit https://github.com/ml-felipe/tftProto-UARTtouchscreen.git
 cd tftProto-UARTtouchscreen
-make                         # SPI_DIR defaults to ../tftProto_SPIdriver
+make
 cd tftDriverExpansion
 sudo ./tftDriver.exe
 ```
 
-Install the bcm2835 library as described in the SPI README. The application also links the standard math library (`-lm`). For a different checkout location, use `make SPI_DIR=/path/to/tftProto_SPIdriver`. The build enables centered image placement to preserve the original GUI archive's behavior. Run from `tftDriverExpansion/` for `on.bmp` and `off.bmp`; other image names can be supplied by copying the existing SPI demo images into that runtime image directory.
+For another driver location, pass `SPI_DIR=/path/to/tftProto_SPIdriver` to Make. The build links libm and enables centered images, preserving the original GUI layout. Run from `tftDriverExpansion/` for `images/on.bmp` and `off.bmp`. Other SPI demo images can be copied into that directory. The retained `newTftDriver.tar.gz` is historical and does not contain the fixes; use the source build above.
 
-The historical `newTftDriver.tar.gz` is retained unchanged for reference. It contains older copies of the driver and does not contain these fixes. Source checkouts and the root Makefile are the maintained build path; manual overlaying is unnecessary.
+Select `c`, press each target, then type `c` to accept or `k` to retry. Failed fits preserve the previous calibration; calibration is held only in RAM. Select `t` for freehand or `g` for the GUI after calibrating. Coordinates are transformed directly to display pixels. Freehand fills rectangles between samples; the GUI toggles on a detected new press inside the button. Both modes run until interruption or serial failure; interruption does not guarantee resetting GPIO21.
 
-## Build the PIC firmware
+For firmware, open `uart_pic24F_touchscreen.X` in MPLAB X, select PIC24F16KA101 and regenerate local tool paths. Recorded settings use MPLAB X 6.05, XC16 2.10 and PIC24F-KA-KL-KM_DFP 1.3.49. Build in the IDE or, after configuration, with `make -C uart_pic24F_touchscreen.X`. Rebuild before flashing: tracked `build/` and `dist/` files are historical outputs, not builds of the edited firmware.
 
-Open `uart_pic24F_touchscreen.X` in MPLAB X, select PIC24F16KA101, install/select XC16 and the PIC24F-KA-KL-KM device pack, then regenerate local tool paths and build. Recorded settings use MPLAB X 6.05, XC16 2.10 and device pack 1.3.49. The generated makefiles contain installation-specific paths, so an untouched checkout may not build elsewhere. After configuration, the command-line entry point is:
+## Tests and limitations
 
-```sh
-make -C uart_pic24F_touchscreen.X
-```
-
-Rebuild before programming. Committed `build/` and `dist/` files are historical artifacts, not current verification results. UART is enabled before ADC interrupts can transmit, and the main loop services the configured watchdog. The baud divisor remains 25 with BRGH=0; confirm the clock and baud rate on the bench using the [PIC24F16KA102 family datasheet](https://ww1.microchip.com/downloads/en/DeviceDoc/39927c.pdf).
-
-## Calibration and demos
-
-Select `c`, press each target, and type `c` to accept or `k` to retry. Keep the five points spatially separated. Invalid or singular fits leave the previous calibration unchanged. Calibration lives in RAM and must be repeated after restarting. Transformed coordinates remain signed floating-point values until checked against display bounds; they are already in pixels.
-
-Select `t` for freehand drawing or `g` for the GUI after calibration. Freehand mode fills rectangles between successive samples, matching the original demonstration; it is not a line-interpolation algorithm. The GUI toggles once on a detected new press inside the central button. These two modes run until interruption or a serial error; they do not offer an in-mode return to the menu. Stop safely with the external load disconnected when appropriate; interruption does not guarantee resetting its GPIO level.
-
-## Host checks and limitations
-
-With the audited SPI checkout present, no bcm2835 installation is needed:
+With the sibling SPI checkout present:
 
 ```sh
 make test host-build
@@ -71,7 +52,11 @@ make clean
 make test host-build CC=clang SANITIZE='-fsanitize=address,undefined -fno-omit-frame-pointer'
 ```
 
-Tests cover parser recovery, affine mapping and degenerate input, first-target calibration retry, serial configuration, consecutive frames and disconnects using a Linux pseudo-terminal. They do not measure touch accuracy, ADC settling, UART electrical timing or SPI behavior. The firmware still uses delay loops and blocking UART transmission inside the ADC ISR; conversion/channel timing needs a hardware review. The affine solver retains normal equations and is not intended for ill-conditioned point sets. See [AUDIT.md](AUDIT.md) for results and remaining bench checks.
+Tests cover frame recovery, affine mapping, calibration retry/failure, Linux pseudo-terminal setup and disconnects, and centered GUI image pixels/window bounds through the shared SPI driver. Clean before changing compiler or sanitizer flags.
+
+GCC 16.2.1 tests, mock-SPI application builds and static analysis passed. Clang 23.1.4 AddressSanitizer/UndefinedBehaviorSanitizer tests passed with `ASAN_OPTIONS=detect_leaks=0`; container tracing restrictions prevented LeakSanitizer. Production builds were blocked by missing bcm2835 and MPLAB/XC16. No PIC, Raspberry Pi or physical touchscreen verification ran.
+
+UART now initializes before ADC interrupts transmit, and the idle loop services the enabled watchdog. These firmware changes and the SPI register-width correction need bench verification. The ISR still switches ADC channels during auto-sampling, uses delay loops and blocks on UART transmission: check settling, conversion association, optimization effects and watchdog behavior. Confirm oscillator/baud timing against the [device datasheet](https://ww1.microchip.com/downloads/en/DeviceDoc/39927c.pdf). The affine solver uses normal equations without a residual-quality threshold; calibration accuracy has not been measured.
 
 ## Demos
 
@@ -87,4 +72,4 @@ https://github.com/user-attachments/assets/f7631ceb-60e0-4256-99d3-4c5e1f2b5abd
 
 https://github.com/user-attachments/assets/c7ddd30c-6a44-4a06-9635-87f4f4609aea
 
-Additional recording: [input detection](tftDriverExpansion/demos/input_detection.mp4). The existing recordings in `tftDriverExpansion/demos/` are retained; they are not tests of the current changes. Original authorship and vendor notices remain in the source.
+Additional recording: [input detection](tftDriverExpansion/demos/input_detection.mp4). Existing videos predate these fixes; media and source/vendor credits are retained.
