@@ -2,7 +2,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <ctype.h>
 #include <unistd.h>
+#include <math.h>
 #include "include/config_and_spi.h"
 #include "include/print.h"
 #include "include/uart_touchscreen.h"
@@ -14,7 +18,21 @@ int aux = 0;
 char buffer[BUFFER_SIZE];
 uint16_t aux_color;
 
-int chooseMode() {
+/* Bound numeric input before conversion; malformed input exits cleanly. */
+static int read_integer(int *value) {
+    char token[64], *end;
+    if (scanf("%63s", token) != 1) return 0;
+    int next = getchar();
+    if (next != EOF && !isspace((unsigned char)next)) return 0;
+    errno = 0;
+    long number = strtol(token, &end, 10);
+    if (errno || *end || end == token || number < INT_MIN || number > INT_MAX)
+        return 0;
+    *value = (int)number;
+    return 1;
+}
+
+int chooseMode(void) {
     printf("\nSELECT A MODE\n");
     printf("1. Pixel print\n");
     printf("2. Line print\n");
@@ -28,38 +46,38 @@ int chooseMode() {
     printf("g. GUI\n");
     printf("t. Touchscreen\n");
     printf("q. Quit\n");
-    scanf("%c", &choice);
-    while(choice == '\n') scanf("%c", &choice);
-    while (getchar() != '\n');  // Clear input buffer
+    if (scanf(" %c", &choice) != 1) return 1;
+    int ch;
+    while ((ch = getchar()) != '\n' && ch != EOF) {}
     switch(choice) {
     case '1':
         printf("\nPIXEL PRINT MODE\n");
         printf("Enter (x, y) position\n");
-        scanf("%d", &x_1);
-        scanf("%d", &y_1);
+        if (read_integer(&x_1) != 1) return 1;
+        if (read_integer(&y_1) != 1) return 1;
         printArea(x_1, y_1, x_1, y_1, 1);
         break;
     case '2':
         printf("\nLINE PRINT MODE\n");
         printf("1. Horizontal\n");
         printf("2. Vertical\n");
-        scanf("%d", &aux);
+        if (read_integer(&aux) != 1) return 1;
         if(aux == 1) {
             printf("Enter x position\n");
-            scanf("%d", &x_1);
+            if (read_integer(&x_1) != 1) return 1;
             printf("Enter y_1 position\n");
-            scanf("%d", &y_1);
+            if (read_integer(&y_1) != 1) return 1;
             printf("Enter y2 position\n");
-            scanf("%d", &y_2);
+            if (read_integer(&y_2) != 1) return 1;
             printArea(x_1, y_1, x_1, y_2, 1);
         }  
         else if(aux == 2) {
             printf("Enter y position\n");
-            scanf("%d", &y_1);
+            if (read_integer(&y_1) != 1) return 1;
             printf("Enter x_1 position\n");
-            scanf("%d", &x_1);
+            if (read_integer(&x_1) != 1) return 1;
             printf("Enter x_2 position\n");
-            scanf("%d", &x_2);
+            if (read_integer(&x_2) != 1) return 1;
             printArea(x_1, y_1, x_2, y_1, 1);
         }
         break;
@@ -67,20 +85,20 @@ int chooseMode() {
         printf("\nRECTANGLE PRINT MODE\n");
         printf("1. Fill\n");
         printf("2. Not fill\n");
-        scanf("%d", &aux);
+        if (read_integer(&aux) != 1) return 1;
         if(aux == 2) aux = 0;
         printf("Enter (x_1, y_1) position\n");
-        scanf("%d", &x_1);
-        scanf("%d", &y_1);
+        if (read_integer(&x_1) != 1) return 1;
+        if (read_integer(&y_1) != 1) return 1;
         printf("Enter (x_2, y2) position\n");
-        scanf("%d", &x_2);
-        scanf("%d", &y_2);
+        if (read_integer(&x_2) != 1) return 1;
+        if (read_integer(&y_2) != 1) return 1;
         printArea(x_1, y_1, x_2, y_2, aux);
         break;
     case '4':
         printf("\nSTRING PRINT MODE\n");
         printf("(%d, %d) Enter a string: ", x_String, y_String);
-        fgets(buffer, sizeof(buffer), stdin);
+        if (!fgets(buffer, sizeof(buffer), stdin)) return 1;
         printChar(buffer);
         break;
     case '5':
@@ -100,7 +118,7 @@ int chooseMode() {
         printf("9. D.Grey   20. Silver      31. Crimsom\n");
         printf("10. Blue    21. Gray        32. Brown\n");
         printf("11. Green   22. Lime        33. Indigo\n");
-        scanf("%d", &aux);
+        if (read_integer(&aux) != 1) return 1;
         color = get_color(aux);
         break;
     case '7':
@@ -116,7 +134,7 @@ int chooseMode() {
         printf("9. D.Grey   20. Silver      31. Crimsom\n");
         printf("10. Blue    21. Gray        32. Brown\n");
         printf("11. Green   22. Lime        33. Indigo\n");
-        scanf("%d", &aux);
+        if (read_integer(&aux) != 1) return 1;
         last_background_color = background_color;
         background_color = get_color(aux);
         printScreen();
@@ -124,7 +142,7 @@ int chooseMode() {
     case '8':
         printf("\nIMAGE PRINT MODE\n");
         printf("Enter filename: ");
-        fgets(buffer, sizeof(buffer), stdin);
+        if (!fgets(buffer, sizeof(buffer), stdin)) return 1;
         buffer[strcspn(buffer, "\n")] = '\0';
         printIMG(buffer);
         break;
@@ -139,20 +157,22 @@ int chooseMode() {
     case 'c':
         printf("CALIBRATION MODE\n");
         printf("Press the center of every point\n");
-        calibrate();
+        if (calibrate() != 0) fprintf(stderr, "Calibration was not updated\n");
         break;
     case 'g':
         printf("GUI MODE\n");
+        if (!calibrated) { fprintf(stderr, "Calibrate first\n"); break; }
         int state = 0;
         printIMG("off.bmp");
         bcm2835_gpio_fsel(21, BCM2835_GPIO_FSEL_OUTP);
         while(1) {
-            Pair pos = getxy();
+            Pair pos;
+            if (getxy(&pos) != 0) { perror("UART read"); return 1; }
             pos = apply_calibration(&cal_matrix, &pos);
-            if(pos.x <= X_SIZE/2 + 15 && pos.x >= X_SIZE/2 - 15 &&
+            if(!pressing && pos.x <= X_SIZE/2 + 15 && pos.x >= X_SIZE/2 - 15 &&
                pos.y <= Y_SIZE/2 + 15 && pos.y >= Y_SIZE/2 - 15) {
                 usleep(50000);
-                state = ~state;
+                state = !state;
                 bcm2835_gpio_write(21, state);
                 if(state) printIMG("on.bmp");
                 else printIMG("off.bmp");
@@ -163,15 +183,21 @@ int chooseMode() {
         printf("TOUCHSCREEN MODE\n");
         printf("*Make sure screen is calibrated*\n");
         printf("Freehand paint\n");
-        Pair last_pos = getxy();
+        if (!calibrated) { fprintf(stderr, "Calibrate first\n"); break; }
+        Pair last_pos;
+        if (getxy(&last_pos) != 0) { perror("UART read"); return 1; }
         last_pos = apply_calibration(&cal_matrix, &last_pos);
-        last_pos.x *= X_SIZE;
-        last_pos.y *= Y_SIZE;
+
         while(1) {
-            Pair pos = getxy();
+            Pair pos;
+            if (getxy(&pos) != 0) { perror("UART read"); return 1; }
             pos = apply_calibration(&cal_matrix, &pos);
             if(pressing == 0) last_pos = pos;
-            printArea(last_pos.x, last_pos.y, pos.x, pos.y, 1);
+            if (isfinite(pos.x) && isfinite(pos.y) && isfinite(last_pos.x) &&
+                isfinite(last_pos.y) && pos.x >= 0 && pos.x < X_SIZE &&
+                pos.y >= 0 && pos.y < Y_SIZE && last_pos.x >= 0 &&
+                last_pos.x < X_SIZE && last_pos.y >= 0 && last_pos.y < Y_SIZE)
+                printArea(last_pos.x, last_pos.y, pos.x, pos.y, 1);
             last_pos = pos;
         }
         break;
@@ -185,7 +211,7 @@ int chooseMode() {
     return 0;
 }
 
-int main() {
+int main(void) {
     if (!bcm2835_init()) {
         printf("bcm2835_init failed. Are you running as root??\n");
         return 1;
@@ -195,6 +221,7 @@ int main() {
    
     if (!bcm2835_spi_begin()) {
         printf("bcm2835_spi_begin failed. Are you running as root??\n");
+        bcm2835_close();
         return 1;
     }
     printf("spi initialized\n\n");
@@ -218,7 +245,12 @@ int main() {
     printScreen();
 
     printf("Uart initialization\n\n");
-    init_uart();
+    if (init_uart() != 0) {
+        perror("UART initialization");
+        bcm2835_spi_end();
+        bcm2835_close();
+        return 1;
+    }
 
     while(!chooseMode()) { }
     bcm2835_spi_end();  

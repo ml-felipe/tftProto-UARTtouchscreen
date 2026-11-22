@@ -7,6 +7,9 @@
 #include "config.h"
 
 
+void UART1_write(char data);
+void read_update(int read_mode);
+
 unsigned int x, y;
 char checksum;
 char debug_buff[4];
@@ -124,10 +127,10 @@ int main (void) {
 
    IPC3bits.AD1IP = 7;     // Interrupt priority
    IFS0bits.AD1IF = 0;     // Clear ADC interrupt flag
-   IEC0bits.AD1IE = 1;     // Enable ADC interrupts
+   IEC0bits.AD1IE = 0;     // Enable only after UART initialization
 
    AD1CON1bits.ADON = 1;   // Turn ADC on
-   AD1CON1bits.ASAM = 1;   // Start sampling
+   AD1CON1bits.ASAM = 0;   // Start only after UART initialization
 
    //Baud Rate
    U1MODEbits.BRGH = 0;
@@ -142,6 +145,10 @@ int main (void) {
    //Enable Tx
    U1STAbits.UTXEN = 1;    // Enable Transmitter
 
-   while(1){}              // Interruption based
+   IFS0bits.AD1IF = 0;
+   IEC0bits.AD1IE = 1;
+   AD1CON1bits.ASAM = 1;
+
+   while(1) { __builtin_clrwdt(); } // Service enabled watchdog
 
 }
