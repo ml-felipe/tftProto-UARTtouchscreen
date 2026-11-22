@@ -10,3 +10,4 @@
 /tests/test_uart
 /tests/serial-test
 /tests/test_calibration_ui
+/tests/test_images
