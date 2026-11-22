@@ -1,0 +1,12 @@
+*.o
+*.o.d
+*.exe
+/tests/test_touch
+/tests/demo_host
+**/build/
+**/dist/
+**/nbproject/private/
+**/nbproject/Makefile-local-*.mk
+/tests/test_uart
+/tests/serial-test
+/tests/test_calibration_ui
