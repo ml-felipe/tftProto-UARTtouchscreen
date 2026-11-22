@@ -5,7 +5,7 @@
 #include "include/calibration.h"
 #include "include/print.h"
 
-// Known calibration points (normalized screen coordinates 0-1)
+// Calibration targets in display pixels.
 static const Pair calibration_screen_points[NUM_CALIBRATION_POINTS] = {
     {0.9 * X_SIZE, 0.1 * Y_SIZE},  // top-left
     {0.9 * X_SIZE, 0.9 * Y_SIZE},  // top-right
@@ -14,99 +14,59 @@ static const Pair calibration_screen_points[NUM_CALIBRATION_POINTS] = {
     {0.1 * X_SIZE, 0.9 * Y_SIZE}   // bottom-right
 };
 
-void calibrate() {
+TransformationMatrix cal_matrix;
+int calibrated;
 
-    Pair raw_touch_points[NUM_CALIBRATION_POINTS];
-    // Collect raw touch data
-    collect_calibration_data(raw_touch_points);
-    
-    // Calculate calibration matrix
-    cal_matrix = calculate_calibration_matrix(
-        calibration_screen_points, 
-        raw_touch_points, 
-        NUM_CALIBRATION_POINTS
-    );
-    
-    /* DEBUG PURPOSE 
-    printf("\nCalibration complete. Transformation matrix:\n");
-    print_matrix(&cal_matrix);
-    
-    // Test calibration
-    printf("\nTesting calibration - enter raw points to see calibrated result (enter x=-1 to exit)\n");
-    while(1) {
-        Pair test_point;
-        printf("Enter raw X,Y: ");
-        scanf("%lf %lf", &test_point.x, &test_point.y);
-        
-        if(test_point.x == -1) break;
-        
-        Pair calibrated = apply_calibration(&cal_matrix, &test_point);
-        printf("Calibrated point: %.3f, %.3f\n", calibrated.x, calibrated.y);
-    }*/
-
+int calibrate(void) {
+    Pair raw[NUM_CALIBRATION_POINTS];
+    TransformationMatrix candidate;
+    if (collect_calibration_data(raw) != 0) return -1;
+    if (calculate_calibration_matrix(calibration_screen_points, raw,
+                                     NUM_CALIBRATION_POINTS, &candidate) != 0) {
+        fprintf(stderr, "Calibration failed: use distinct, non-collinear points\n");
+        return -1;
+    }
+    cal_matrix = candidate;
+    calibrated = 1;
+    return 0;
 }
 
-void collect_calibration_data(Pair raw_points[]) {
+int collect_calibration_data(Pair raw_points[]) {
     calibrating = 1;
-    for(int i = 0; i < NUM_CALIBRATION_POINTS; i++) {
-        printArea(
-            calibration_screen_points[i].x - 1, 
-            calibration_screen_points[i].y - 1,
-            calibration_screen_points[i].x + 1,
-            calibration_screen_points[i].y + 1, 1);
-
-        Pair pos = getxy();
-        raw_points[i] = pos;
-        printf("(%d, %d)\n", pos.x, pos.y);
-        printf("Press c to continue, k to repeat\n");
-        char c;
-        scanf("%c", &c);
-        while(c == '\n') scanf("%c", &c);
-        while (getchar() != '\n');  // Clear input buffer
-        if(c == 'k') --i;
-
-        uint16_t aux_color = color;
+    for (int i = 0; i < NUM_CALIBRATION_POINTS;) {
+        Pair target = calibration_screen_points[i];
+        printArea(target.x - 1, target.y - 1, target.x + 1, target.y + 1, 1);
+        Pair pos;
+        int status = getxy(&pos);
+        uint16_t saved_color = color;
         color = background_color;
-        printArea(
-            calibration_screen_points[i].x - 1, 
-            calibration_screen_points[i].y - 1,
-            calibration_screen_points[i].x + 1,
-            calibration_screen_points[i].y + 1, 1);
-        color = aux_color;
+        printArea(target.x - 1, target.y - 1, target.x + 1, target.y + 1, 1);
+        color = saved_color;
+        if (status != 0) { calibrating = 0; return -1; }
+        printf("(%.0f, %.0f)\nPress c to continue, k to repeat\n", pos.x, pos.y);
+        char c;
+        if (scanf(" %c", &c) != 1) { calibrating = 0; return -1; }
+        int ch;
+        while ((ch = getchar()) != '\n' && ch != EOF) {}
+        if (c == 'c') raw_points[i++] = pos;
     }
     calibrating = 0;
+    return 0;
 }
 
-TransformationMatrix calculate_calibration_matrix(const Pair screen_points[], const Pair raw_points[], int num_points) {
+int calculate_calibration_matrix(const Pair screen_points[], const Pair raw_points[], int num_points, TransformationMatrix *output) {
     // We're solving the system: A * params = B
     // For affine transformation: x' = a*x + b*y + c
     //                           y' = d*x + e*y + f
     
-    // Allocate matrices
-    double* A = (double*)malloc(2 * num_points * 6 * sizeof(double));
-    double* B = (double*)malloc(2 * num_points * sizeof(double));
-    
-    // Fill matrices
-    for(int i = 0; i < num_points; i++) {
-        // For x equation
-        A[12*i + 0] = raw_points[i].x;
-        A[12*i + 1] = raw_points[i].y;
-        A[12*i + 2] = 1;
-        A[12*i + 3] = 0;
-        A[12*i + 4] = 0;
-        A[12*i + 5] = 0;
-        B[2*i] = screen_points[i].x;
-        
-        // For y equation
-        A[12*i + 6] = 0;
-        A[12*i + 7] = 0;
-        A[12*i + 8] = 0;
-        A[12*i + 9] = raw_points[i].x;
-        A[12*i + 10] = raw_points[i].y;
-        A[12*i + 11] = 1;
-        B[2*i + 1] = screen_points[i].y;
+    if (!screen_points || !raw_points || !output || num_points < 3) return -1;
+    for (int i = 0; i < num_points; ++i) {
+        if (!isfinite(raw_points[i].x) || !isfinite(raw_points[i].y) ||
+            !isfinite(screen_points[i].x) || !isfinite(screen_points[i].y) ||
+            raw_points[i].x < 0 || raw_points[i].x > 1023 ||
+            raw_points[i].y < 0 || raw_points[i].y > 1023) return -1;
     }
-    
+
     // Solve using least squares (simplified approach)
     TransformationMatrix matrix;
     
@@ -137,9 +97,9 @@ TransformationMatrix calculate_calibration_matrix(const Pair screen_points[], co
                  sum_xy*(sum_xy*num_points - sum_y*sum_x) + 
                  sum_x*(sum_xy*sum_y - sum_y2*sum_x);
     
-    if(fabs(det) < 1e-10) {
+    if(!isfinite(det) || fabs(det) <= 1e-12 * fmax(1.0, sum_x2 * sum_y2 * num_points)) {
         printf("Error: Calibration points are colinear or poorly conditioned\n");
-        exit(1);
+        return -1;
     }
     
     matrix.a = (sum_sx_x*(sum_y2*num_points - sum_y*sum_y) - 
@@ -179,10 +139,10 @@ TransformationMatrix calculate_calibration_matrix(const Pair screen_points[], co
                 sum_xy*(sum_xy*sum_sy - sum_sy_y*sum_x) + 
                 sum_sy_x*(sum_xy*sum_y - sum_y2*sum_x)) / det;
     
-    free(A);
-    free(B);
-    
-    return matrix;
+    if (!isfinite(matrix.a) || !isfinite(matrix.b) || !isfinite(matrix.c) ||
+        !isfinite(matrix.d) || !isfinite(matrix.e) || !isfinite(matrix.f)) return -1;
+    *output = matrix;
+    return 0;
 }
 
 Pair apply_calibration(const TransformationMatrix* matrix, const Pair* raw_point) {
